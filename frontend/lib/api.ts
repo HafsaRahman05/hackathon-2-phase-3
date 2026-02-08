@@ -9,7 +9,9 @@
 
 import { authClient } from "./auth";
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+// lib/api.ts
+const API_URL = process.env.NEXT_PUBLIC_API_URL || "https://hackathon-2-phase-3-production.up.railway.app";
+
 
 /**
  * Task type definition matching backend Task model.
