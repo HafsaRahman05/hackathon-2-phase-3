@@ -6,7 +6,8 @@ import { useState, useRef, useEffect, FormEvent } from 'react';
 import { api, Task } from '../lib/api';
 import { authClient } from '../lib/auth';
 
-const MCP_SERVER_URL = process.env.NEXT_PUBLIC_MCP_SERVER_URL || 'http://localhost:5000';
+// ChatPanel.tsx
+const MCP_SERVER_URL = process.env.NEXT_PUBLIC_MCP_SERVER_URL || 'https://hackathon-2-phase-3-omega.vercel.app';
 
 interface Message {
   role: 'user' | 'assistant';
