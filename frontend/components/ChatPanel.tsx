@@ -1,8 +1,10 @@
 /**
  * ChatPanel component - AI chatbot interface for natural language todo management.
- * Phase 3: AI-Driven Todo Chatbot
+ * Phase 3: AI-Driven Todo Chatbot with real-time task updates
  */
 import { useState, useRef, useEffect, FormEvent } from 'react';
+import { api, Task } from '../lib/api';
+import { authClient } from '../lib/auth';
 
 const MCP_SERVER_URL = process.env.NEXT_PUBLIC_MCP_SERVER_URL || 'http://localhost:5000';
 
@@ -18,12 +20,12 @@ interface ChatPanelProps {
 
 export default function ChatPanel({ token }: ChatPanelProps) {
   const [messages, setMessages] = useState<Message[]>([]);
+  const [tasks, setTasks] = useState<Task[]>([]); // Local task state
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
   const [isOpen, setIsOpen] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
-  // Example commands to display
   const exampleCommands = [
     "add buy groceries",
     "list my todos",
@@ -39,60 +41,99 @@ export default function ChatPanel({ token }: ChatPanelProps) {
 
   const sendMessage = async (e?: FormEvent) => {
     if (e) e.preventDefault();
-
     if (!input.trim() || loading) return;
 
-    if (!token) {
-      alert('Please login to use the chat');
+    const user = authClient.getUserFromToken();
+    if (!user) {
+      alert("Please login to use the chat");
       return;
     }
 
-    const userMessage: Message = {
-      role: 'user',
-      content: input,
-      timestamp: new Date()
-    };
-
+    const userMessage: Message = { role: 'user', content: input, timestamp: new Date() };
     setMessages(prev => [...prev, userMessage]);
     setInput('');
     setLoading(true);
 
     try {
-      const response = await fetch(`${MCP_SERVER_URL}/api/chat`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`
-        },
-        body: JSON.stringify({ message: input })
-      });
+      let assistantResponse = "";
+      const command = input.toLowerCase().trim();
 
-      if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.error || 'Failed to get response');
+      // -------------- BASIC COMMANDS -----------------
+      if (command.startsWith("add ")) {
+        // Add Task
+        const title = input.slice(4).trim();
+        const newTask = await api.createTask(user.id, { title });
+        setTasks(prev => [...prev, newTask]); // Update local state
+        assistantResponse = `✅ Task added: ${newTask.title}`;
+
+      } else if (command.includes("list")) {
+        // List Tasks
+        if (tasks.length === 0) assistantResponse = "Your todo list is empty.";
+        else assistantResponse = tasks
+          .map(t => `- ${t.title} ${t.is_completed ? "(completed)" : ""}`)
+          .join("\n");
+
+      } else if (command.startsWith("complete ")) {
+        // Complete Task
+        const title = input.slice(9).trim();
+        const task = tasks.find(t => t.title.toLowerCase() === title.toLowerCase());
+        if (!task) assistantResponse = `❌ Task not found: ${title}`;
+        else {
+          const updatedTask = await api.toggleTaskCompletion(user.id, task.id, true);
+          setTasks(prev => prev.map(t => t.id === task.id ? updatedTask : t));
+          assistantResponse = `✅ Task completed: ${updatedTask.title}`;
+        }
+
+      } else if (command.startsWith("delete ")) {
+        // Delete Task
+        const title = input.slice(7).trim();
+        const task = tasks.find(t => t.title.toLowerCase() === title.toLowerCase());
+        if (!task) assistantResponse = `❌ Task not found: ${title}`;
+        else {
+          await api.deleteTask(user.id, task.id);
+          setTasks(prev => prev.filter(t => t.id !== task.id));
+          assistantResponse = `❌ Task deleted: ${task.title}`;
+        }
+
+      } else if (command.startsWith("update ")) {
+        // Update Task
+        // Example: "update buy milk to buy almond milk"
+        const match = input.match(/^update (.+?) to (.+)$/i);
+        if (!match) {
+          assistantResponse = "❌ Invalid update command. Use: update <old title> to <new title>";
+        } else {
+          const oldTitle = match[1].trim();
+          const newTitle = match[2].trim();
+          const task = tasks.find(t => t.title.toLowerCase() === oldTitle.toLowerCase());
+          if (!task) assistantResponse = `❌ Task not found: ${oldTitle}`;
+          else {
+            const updatedTask = await api.updateTask(user.id, task.id, { title: newTitle });
+            setTasks(prev => prev.map(t => t.id === task.id ? updatedTask : t));
+            assistantResponse = `✅ Task updated: ${oldTitle} → ${newTitle}`;
+          }
+        }
+
+      } else {
+        // Default: send to MCP AI server
+        const response = await fetch(`${MCP_SERVER_URL}/api/chat`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+          body: JSON.stringify({ message: input })
+        });
+        if (!response.ok) {
+          const error = await response.json();
+          throw new Error(error.error || "Failed to get response");
+        }
+        const data = await response.json();
+        assistantResponse = data.response;
       }
 
-      const data = await response.json();
-
-      const assistantMessage: Message = {
-        role: 'assistant',
-        content: data.response,
-        timestamp: new Date()
-      };
-
+      const assistantMessage: Message = { role: 'assistant', content: assistantResponse, timestamp: new Date() };
       setMessages(prev => [...prev, assistantMessage]);
+
     } catch (err: any) {
-      console.error('Chat error:', err);
-
-      const errorMessage: Message = {
-        role: 'assistant',
-        content: err.message.includes('401')
-          ? 'Session expired. Please login again.'
-          : 'Unable to connect to AI service. Please try again.',
-        timestamp: new Date()
-      };
-
-      setMessages(prev => [...prev, errorMessage]);
+      console.error(err);
+      setMessages(prev => [...prev, { role: 'assistant', content: 'Error: ' + err.message, timestamp: new Date() }]);
     } finally {
       setLoading(false);
     }
@@ -137,46 +178,32 @@ export default function ChatPanel({ token }: ChatPanelProps) {
       </div>
 
       {/* Messages Area */}
-      <div style={{
-        flex: 1,
-        overflowY: 'auto',
-        padding: '15px',
-        backgroundColor: '#f9f9f9'
-      }}>
+      <div style={{ flex: 1, overflowY: 'auto', padding: '15px', backgroundColor: '#f9f9f9' }}>
         {messages.length === 0 ? (
           <div>
-            <p style={{ marginBottom: '10px', color: '#666' }}>
-              Try these commands:
-            </p>
+            <p style={{ marginBottom: '10px', color: '#666' }}>Try these commands:</p>
             {exampleCommands.map((cmd, idx) => (
-              <div
-                key={idx}
-                onClick={() => handleExampleClick(cmd)}
-                style={{
-                  padding: '8px 12px',
-                  marginBottom: '8px',
-                  backgroundColor: '#e3f2fd',
-                  borderRadius: '4px',
-                  cursor: 'pointer',
-                  fontSize: '13px',
-                  color: '#1976d2'
-                }}
-              >
+              <div key={idx} onClick={() => handleExampleClick(cmd)} style={{
+                padding: '8px 12px',
+                marginBottom: '8px',
+                backgroundColor: '#e3f2fd',
+                borderRadius: '4px',
+                cursor: 'pointer',
+                fontSize: '13px',
+                color: '#1976d2'
+              }}>
                 {cmd}
               </div>
             ))}
           </div>
         ) : (
           messages.map((msg, idx) => (
-            <div
-              key={idx}
-              style={{
-                marginBottom: '15px',
-                display: 'flex',
-                flexDirection: 'column',
-                alignItems: msg.role === 'user' ? 'flex-end' : 'flex-start'
-              }}
-            >
+            <div key={idx} style={{
+              marginBottom: '15px',
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: msg.role === 'user' ? 'flex-end' : 'flex-start'
+            }}>
               <div style={{
                 maxWidth: '80%',
                 padding: '10px 15px',
@@ -205,11 +232,7 @@ export default function ChatPanel({ token }: ChatPanelProps) {
       </div>
 
       {/* Input Area */}
-      <form onSubmit={sendMessage} style={{
-        padding: '15px',
-        borderTop: '1px solid #ddd',
-        backgroundColor: 'white'
-      }}>
+      <form onSubmit={sendMessage} style={{ padding: '15px', borderTop: '1px solid #ddd', backgroundColor: 'white' }}>
         <div style={{ display: 'flex', gap: '10px' }}>
           <input
             type="text"
@@ -217,13 +240,7 @@ export default function ChatPanel({ token }: ChatPanelProps) {
             onChange={(e) => setInput(e.target.value)}
             placeholder="Type a command..."
             disabled={loading}
-            style={{
-              flex: 1,
-              padding: '10px',
-              fontSize: '14px',
-              border: '1px solid #ddd',
-              borderRadius: '4px'
-            }}
+            style={{ flex: 1, padding: '10px', fontSize: '14px', border: '1px solid #ddd', borderRadius: '4px' }}
           />
           <button
             type="submit"

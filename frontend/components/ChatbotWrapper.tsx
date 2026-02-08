@@ -1,19 +1,15 @@
 "use client";
-
-import { useEffect, useState } from "react";
-import ChatPanel from "./ChatPanel";
+import { useAuth } from "./AuthProvider";
 
 export default function ChatbotWrapper() {
-  const [token, setToken] = useState<string | null>(null);
+  const { user, isAuthenticated } = useAuth();
 
-  useEffect(() => {
-    // Login token localStorage se le rahe hain
-    const t = localStorage.getItem("token");
-    console.log("Token:", t);
-    setToken(t);
-  }, []);
+  if (!isAuthenticated || !user) return null; // user login nahi toh chatbot hide
 
-  if (!token) return null; // Agar login nahi, to chatbot show nahi hoga
-
-  return <ChatPanel token={token} />;
+  return (
+    <div className="fixed bottom-4 right-4">
+      {/* Aapka Chatbot UI */}
+      <p>Chatbot Active</p>
+    </div>
+  );
 }

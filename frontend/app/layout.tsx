@@ -1,21 +1,13 @@
-/**
- * Root layout for the Next.js application.
- *
- * This layout wraps all pages and provides:
- * - Global styles
- * - Authentication context
- * - HTML structure
- * - Logout functionality
- */
-
+// app/layout.tsx
 import type { Metadata } from "next";
 import { Inter } from "next/font/google";
-import "./globals.css";
 import { AuthProvider } from "@/components/AuthProvider";
 import ChatbotWrapper from "@/components/ChatbotWrapper";
+import "./globals.css";
 
 const inter = Inter({ subsets: ["latin"] });
 
+// ✅ Server-safe metadata export
 export const metadata: Metadata = {
   title: {
     default: "Todo App - Phase II",
@@ -38,20 +30,17 @@ export const metadata: Metadata = {
   },
 };
 
-export default function RootLayout({
-  children,
-}: {
-  children: React.ReactNode;
-}) {
+export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en">
       <body className={inter.className}>
+        {/* AuthProvider client component */}
         <AuthProvider>
           {children}
-          {/* ✅ Chatbot yahan render hoga */}
+
+          {/* ChatbotWrapper is client-only and uses useAuth internally */}
           <ChatbotWrapper />
         </AuthProvider>
-        
       </body>
     </html>
   );

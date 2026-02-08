@@ -1,186 +1,173 @@
-"""MCP Server for Todo API - wraps Phase 2 REST APIs as MCP tools using OpenAI SDK."""
-
-import os
-import json
-import requests
-from typing import Optional
-from dotenv import load_dotenv
-from flask import Flask, request, jsonify
-from flask_cors import CORS
-from openai import OpenAI
-
-# Load environment variables
-load_dotenv()
-
-# ---------------- CONFIGURATION ----------------
-BACKEND_URL = os.getenv("BACKEND_URL", "http://localhost:8000")
-LLM_MODEL = os.getenv("LLM_MODEL", "gpt-3.5-turbo")
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-
-if not OPENAI_API_KEY:
-    raise ValueError("OPENAI_API_KEY must be set in .env file")
-
-# Initialize OpenAI client
-client = OpenAI(api_key=OPENAI_API_KEY)
-
-# ---------------- SYSTEM PROMPT ----------------
-SYSTEM_PROMPT = """You are a todo management assistant. You help users manage their todos through natural language commands.
-
-Available operations:
-- CREATE todo: "add [task]", "create [task]", "remind me to [task]"
-- LIST todos: "list", "show my todos", "what do I need to do"
-- COMPLETE todo: "complete [task/id]", "finish [task]", "mark [task] as done"
-- UPDATE todo: "update [task] to [new title]", "change [task] to [new title]", "rename [task]"
-- DELETE todo: "delete [task/id]", "remove [task]"
-
-CRITICAL RULES:
-1. NEVER hallucinate or invent todo IDs or titles
-2. ONLY use data returned from backend responses
-3. Ask clarification if command is ambiguous
-4. Use list_todos for fuzzy title matching
-5. Always pass JWT token to backend
+"""
+MCP Server for Todo API
+Handles AI chatbot commands and performs real CRUD on Phase 2 backend
 """
 
-# ---------------- BACKEND TOOLS ----------------
-def create_todo(title: str, jwt_token: str) -> dict:
-    if not jwt_token:
-        return {"error": "JWT token required"}
+import os
+import requests
+from flask import Flask, request, jsonify
+from flask_cors import CORS
+from dotenv import load_dotenv
+
+load_dotenv()
+
+BACKEND_URL = os.getenv("BACKEND_URL", "http://localhost:8000")
+
+app = Flask(__name__)
+CORS(app)
+
+# ---------------- TOOLS ----------------
+def create_todo(title: str, token: str):
     try:
         res = requests.post(
             f"{BACKEND_URL}/api/todos",
             json={"title": title},
-            headers={"Authorization": f"Bearer {jwt_token}"},
+            headers={"Authorization": f"Bearer {token}"},
             timeout=5
         )
         if res.status_code == 201:
-            return res.json()
-        return {"error": res.json().get("detail", "Failed to create todo"), "status_code": res.status_code}
+            return {"success": True, "todo": res.json()}
+        else:
+            return {"success": False, "error": res.json().get("detail", "Failed to create todo")}
     except Exception as e:
-        return {"error": str(e)}
+        return {"success": False, "error": str(e)}
 
-def list_todos(jwt_token: str, status_filter: Optional[str] = None) -> dict:
-    if not jwt_token:
-        return {"error": "JWT token required"}
+def list_todos(token: str):
     try:
         res = requests.get(
             f"{BACKEND_URL}/api/todos",
-            headers={"Authorization": f"Bearer {jwt_token}"},
+            headers={"Authorization": f"Bearer {token}"},
             timeout=5
         )
         if res.status_code == 200:
-            todos = res.json().get("todos", [])
-            if status_filter:
-                todos = [t for t in todos if t.get("status") == status_filter]
-            return {"todos": todos}
-        return {"error": res.json().get("detail", "Failed to list todos"), "status_code": res.status_code}
+            return res.json().get("todos", [])
+        else:
+            return []
     except Exception as e:
-        return {"error": str(e)}
+        return []
 
-def complete_todo(todo_id: int, jwt_token: str) -> dict:
-    if not jwt_token:
-        return {"error": "JWT token required"}
+def complete_todo(todo_id: int, token: str):
     try:
         res = requests.patch(
             f"{BACKEND_URL}/api/todos/{todo_id}/complete",
-            headers={"Authorization": f"Bearer {jwt_token}"},
+            headers={"Authorization": f"Bearer {token}"},
             timeout=5
         )
         if res.status_code == 200:
-            return res.json()
-        return {"error": res.json().get("detail", "Failed to complete todo"), "status_code": res.status_code}
+            return {"success": True}
+        return {"success": False, "error": res.json().get("detail", "Failed to complete todo")}
     except Exception as e:
-        return {"error": str(e)}
+        return {"success": False, "error": str(e)}
 
-def update_todo(todo_id: int, new_title: str, jwt_token: str) -> dict:
-    if not jwt_token:
-        return {"error": "JWT token required"}
+def update_todo(todo_id: int, new_title: str, token: str):
     try:
         res = requests.patch(
             f"{BACKEND_URL}/api/todos/{todo_id}",
             json={"title": new_title},
-            headers={"Authorization": f"Bearer {jwt_token}"},
+            headers={"Authorization": f"Bearer {token}"},
             timeout=5
         )
         if res.status_code == 200:
-            return res.json()
-        return {"error": res.json().get("detail", "Failed to update todo"), "status_code": res.status_code}
+            return {"success": True}
+        return {"success": False, "error": res.json().get("detail", "Failed to update todo")}
     except Exception as e:
-        return {"error": str(e)}
+        return {"success": False, "error": str(e)}
 
-def delete_todo(todo_id: int, jwt_token: str) -> dict:
-    if not jwt_token:
-        return {"error": "JWT token required"}
+def delete_todo(todo_id: int, token: str):
     try:
         res = requests.delete(
             f"{BACKEND_URL}/api/todos/{todo_id}",
-            headers={"Authorization": f"Bearer {jwt_token}"},
+            headers={"Authorization": f"Bearer {token}"},
             timeout=5
         )
         if res.status_code == 204:
-            return {"success": True, "message": "Todo deleted"}
-        return {"error": res.json().get("detail", "Failed to delete todo"), "status_code": res.status_code}
+            return {"success": True}
+        return {"success": False, "error": res.json().get("detail", "Failed to delete todo")}
     except Exception as e:
-        return {"error": str(e)}
+        return {"success": False, "error": str(e)}
 
-# ---------------- MCP TOOL CALL ----------------
-def process_tool_call(tool_name: str, tool_input: dict, jwt_token: str) -> dict:
-    if tool_name == "create_todo":
-        return create_todo(tool_input.get("title"), jwt_token)
-    elif tool_name == "list_todos":
-        return list_todos(jwt_token, tool_input.get("status_filter"))
-    elif tool_name == "complete_todo":
-        return complete_todo(tool_input.get("todo_id"), jwt_token)
-    elif tool_name == "update_todo":
-        return update_todo(tool_input.get("todo_id"), tool_input.get("new_title"), jwt_token)
-    elif tool_name == "delete_todo":
-        return delete_todo(tool_input.get("todo_id"), jwt_token)
-    return {"error": f"Unknown tool: {tool_name}"}
+# ---------------- CHAT LOGIC ----------------
+def process_message(message: str, token: str):
+    msg = message.lower().strip()
 
-# ---------------- CHAT FUNCTION ----------------
-def chat(message: str, jwt_token: str) -> str:
-    if not jwt_token:
-        return "Error: Authentication required. Please login."
+    # ---------- CREATE ----------
+    if msg.startswith("add"):
+        title = msg.replace("add", "").strip()
+        result = create_todo(title, token)
+        if result.get("success"):
+            return f"✅ Task added: {title}"
+        else:
+            return f"❌ Failed to add task: {result.get('error')}"
 
-    try:
-        messages = [
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": message}
-        ]
+    # ---------- LIST ----------
+    if "list" in msg:
+        todos = list_todos(token)
+        if not todos:
+            return "📭 No tasks found"
+        return "\n".join([f"- [{t['status']}] {t['title']} (ID: {t['id']})" for t in todos])
 
-        response = client.chat.completions.create(
-            model=LLM_MODEL,
-            messages=messages,
-            max_tokens=1024
-        )
+    # ---------- COMPLETE ----------
+    if msg.startswith("complete"):
+        title = msg.replace("complete", "").strip()
+        todos = list_todos(token)
+        matched = next((t for t in todos if t['title'].lower() == title.lower()), None)
+        if not matched:
+            return "❌ Task not found"
+        result = complete_todo(matched['id'], token)
+        if result.get("success"):
+            return f"✅ Task marked as complete: {title}"
+        else:
+            return f"❌ Failed to complete task: {result.get('error')}"
 
-        return response.choices[0].message.get("content", "I processed your request.")
+    # ---------- DELETE ----------
+    if msg.startswith("delete"):
+        title = msg.replace("delete", "").strip()
+        todos = list_todos(token)
+        matched = next((t for t in todos if t['title'].lower() == title.lower()), None)
+        if not matched:
+            return "❌ Task not found"
+        result = delete_todo(matched['id'], token)
+        if result.get("success"):
+            return f"🗑️ Task deleted: {title}"
+        else:
+            return f"❌ Failed to delete task: {result.get('error')}"
 
-    except Exception as e:
-        return f"Error processing command: {str(e)}"
+    # ---------- UPDATE ----------
+    if msg.startswith("update"):
+        # Expected: update old_title to new_title
+        if " to " not in msg:
+            return "❌ Use format: update [old title] to [new title]"
+        old_title, new_title = msg.replace("update", "").split(" to ")
+        old_title = old_title.strip()
+        new_title = new_title.strip()
+        todos = list_todos(token)
+        matched = next((t for t in todos if t['title'].lower() == old_title.lower()), None)
+        if not matched:
+            return "❌ Task not found"
+        result = update_todo(matched['id'], new_title, token)
+        if result.get("success"):
+            return f"✏️ Task updated: {old_title} → {new_title}"
+        else:
+            return f"❌ Failed to update task: {result.get('error')}"
 
-# ---------------- FLASK APP ----------------
-app = Flask(__name__)
-CORS(app)  # Allow frontend calls
+    return "❓ I didn’t understand. Try: add / list / complete / delete / update"
 
-@app.route('/api/chat', methods=['POST'])
-def chat_endpoint():
-    data = request.get_json()
-    if not data or not data.get("message"):
-        return jsonify({"error": "Message required"}), 400
-
+# ---------------- API ----------------
+@app.route("/api/chat", methods=["POST"])
+def chat():
     token = request.headers.get("Authorization", "").replace("Bearer ", "")
     if not token:
-        return jsonify({"error": "Authentication required"}), 401
+        return jsonify({"response": "Unauthorized"}), 401
 
-    resp = chat(data["message"], token)
-    return jsonify({"response": resp})
+    data = request.get_json()
+    message = data.get("message", "")
+    response = process_message(message, token)
+    return jsonify({"response": response})
 
-@app.route('/health', methods=['GET'])
+@app.route("/health")
 def health():
-    return jsonify({"status": "ok", "service": "mcp-todo-server"})
+    return jsonify({"status": "ok", "service": "mcp-server"})
 
-# ---------------- MAIN ----------------
 if __name__ == "__main__":
-    print("Starting MCP Todo Server on http://localhost:5000")
-    port = int(os.getenv("MCP_PORT", 5000))
-    app.run(host="0.0.0.0", port=port, debug=True)
+    print("🚀 MCP Server running on port 5000")
+    app.run(host="0.0.0.0", port=5000, debug=True)
